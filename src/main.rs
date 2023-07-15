@@ -1,61 +1,32 @@
-use std::{error::Error, net::SocketAddr, sync::Arc};
+use axum::{routing::get, Router};
+use std::{error::Error, net::SocketAddr};
 
-use axum::{
-    extract::{Json, State},
-    http::StatusCode,
-    response::IntoResponse,
-    routing::post,
-    Router,
-};
-
+mod error;
 mod projects;
-
-pub struct AppError(anyhow::Error);
-
-impl<E> From<E> for AppError
-where
-    E: Into<anyhow::Error>,
-{
-    fn from(err: E) -> Self {
-        Self(err.into())
-    }
-}
-
-impl IntoResponse for AppError {
-    fn into_response(self) -> axum::response::Response {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Something went wrong: {}", self.0),
-        )
-            .into_response()
-    }
-}
-
-async fn create_project_handler(
-    State(app_state): State<Arc<AppState>>,
-    Json(project_create): Json<projects::model::ProjectCreate>,
-) -> Result<Json<projects::model::Project>, AppError> {
-    let created_project = projects::repo::create_project(&app_state.pool, project_create).await?;
-    Ok(Json(created_project))
-}
-
-pub struct AppState {
-    pool: sqlx::PgPool,
-}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let url = "postgres://postgres:dev@localhost:5432/graphite";
-    let pool = sqlx::postgres::PgPool::connect(url).await?;
+    let db_conn_url = std::env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://postgres:dev@localhost:5432/graphite".to_string());
 
-    sqlx::migrate!("./migrations").run(&pool).await?;
+    // TODO: Look into PgPoolOptions
+    let pool = sqlx::postgres::PgPool::connect(&db_conn_url)
+        .await
+        .expect("can't connect to the database");
 
-    let app_state = Arc::new(AppState { pool });
+    sqlx::migrate!("./migrations")
+        .run(&pool)
+        .await
+        .expect("can't run database migrations");
+
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
 
     let app = Router::new()
-        .route("/projects", post(create_project_handler))
-        .with_state(app_state);
+        .route(
+            "/projects",
+            get(projects::routes::get_all_projects).post(projects::routes::create_project),
+        )
+        .with_state(pool);
 
     println!("Listening on {}", addr);
 
