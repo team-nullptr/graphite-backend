@@ -1,10 +1,11 @@
-version: '3.1'
+version: "3.1"
 
 services:
   database:
     image: postgres
     restart: always
     environment:
+      POSTGRES_DB: database
       POSTGRES_PASSWORD: dev
     ports:
       - 5432:5432
