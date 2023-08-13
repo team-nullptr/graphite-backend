@@ -6,7 +6,8 @@ use std::{
     sync::Arc,
 };
 
-use axum::{routing::get, Router};
+use auth::session::auth_middleware;
+use axum::{middleware, routing::get, Router};
 use clap::Parser;
 use futures_util::future::poll_fn;
 use hyper::{
@@ -115,12 +116,15 @@ pub async fn start_app() -> Result<(), Box<dyn std::error::Error>> {
         .allow_credentials(true);
 
     // Routing
-    let projects_route = Router::new().route(
-        "/",
-        get(projects::handlers::get_all_projects)
-            .post(projects::handlers::create_project)
-            .layer(auth::session::SessionManager::new(db.clone())),
-    );
+    let projects_route = Router::new()
+        .route(
+            "/",
+            get(projects::handlers::get_all_projects).post(projects::handlers::create_project),
+        )
+        .route_layer(middleware::from_fn_with_state(
+            app_state.clone(),
+            auth_middleware,
+        ));
 
     let mut app = Router::new()
         .route("/auth/github", get(auth::handlers::github_oauth_redirect))

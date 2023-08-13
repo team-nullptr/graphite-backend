@@ -1,13 +1,16 @@
-use std::{future::Future, pin::Pin};
-
-use axum::response::{IntoResponse, Response};
+use axum::{
+    async_trait,
+    extract::{FromRequestParts, State},
+    http::request::Parts,
+    middleware::Next,
+    response::{IntoResponse, Response},
+};
 use axum_extra::extract::cookie::Cookie;
-use hyper::{header::COOKIE, Body, Request, StatusCode};
+use hyper::{header::COOKIE, Request, StatusCode};
 use sqlx::{query, query_as, FromRow, MySqlPool};
-use tower::{Layer, Service};
 use uuid::Uuid;
 
-use crate::github::GitHubUser;
+use crate::{github::GitHubUser, AppState};
 
 #[derive(Debug, Clone, FromRow)]
 pub struct Session {
@@ -71,81 +74,59 @@ impl SessionManager {
     }
 }
 
-impl<S> Layer<S> for SessionManager {
-    type Service = SessionService<S>;
+/// Extracts session id from session cookie.
+/// If there will be any errors with extracting the session cookie reponds with 400 Bad Request.
+///
+/// If you need to access current session user use session::auth_middleware instead.
+pub struct ExtractSessionId(String);
 
-    fn layer(&self, inner: S) -> Self::Service {
-        SessionService {
-            inner,
-            session_manager: self.clone(),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct SessionService<S> {
-    inner: S,
-    session_manager: SessionManager,
-}
-
-// TODO: Rewrite this to
-impl<S> Service<Request<Body>> for SessionService<S>
+#[async_trait]
+impl<S> FromRequestParts<S> for ExtractSessionId
 where
-    S: Service<Request<Body>, Response = Response> + Send + Clone + 'static,
-    S::Future: Send + 'static,
+    S: Send + Sync,
 {
-    type Response = S::Response;
-    type Error = S::Error;
-    type Future =
-        Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send + 'static>>;
+    type Rejection = StatusCode;
 
-    fn poll_ready(
-        &mut self,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), Self::Error>> {
-        self.inner.poll_ready(cx)
-    }
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        // TODO: What status codes should be returned when?
 
-    fn call(&mut self, mut req: Request<Body>) -> Self::Future {
-        println!("{:?}", req.headers());
+        // This extractor assumes that HTTP/1.1 is used where ther is a single `Cookie` header with cookies
+        // separated by semicolons.
+        let cookie_header = parts
+            .headers
+            .get(COOKIE)
+            .ok_or(StatusCode::BAD_REQUEST)?
+            .to_str()
+            .map_err(|_| StatusCode::BAD_REQUEST)?;
 
-        // We need to extract session cookie
-        let session_id = req
-            .headers()
-            .get_all(COOKIE)
-            .iter()
-            .filter_map(|cookie_header| cookie_header.to_str().ok())
-            // Some cookie headers might contain multiple cookies
-            .flat_map(|cookie_header| cookie_header.split(";"))
+        let session_id = cookie_header
+            .split(";")
+            .into_iter()
             .filter_map(|cookie_header| Cookie::parse_encoded(cookie_header.trim()).ok())
             .filter(|cookie| cookie.name() == "sid")
             .find_map(|cookie| Some(cookie.value().to_string()));
 
-        let session_manager = self.session_manager.clone();
-        let mut inner = self.inner.clone();
+        if let Some(session_id) = session_id {
+            Ok(ExtractSessionId(session_id))
+        } else {
+            Err(StatusCode::UNAUTHORIZED)
+        }
+    }
+}
 
-        Box::pin(async move {
-            match session_id {
-                Some(session_id) => match session_manager.get_session(session_id).await {
-                    Ok(session) => {
-                        if let Some(session) = session {
-                            println!("extracted session: {:?}", session);
-
-                            req.extensions_mut().insert(session);
-                            println!("a");
-                            let response = inner.call(req);
-                            return Ok(response.await?);
-                        }
-
-                        Ok(StatusCode::UNAUTHORIZED.into_response())
-                    }
-                    Err(e) => {
-                        println!("{:?}", e);
-                        Ok(StatusCode::INTERNAL_SERVER_ERROR.into_response())
-                    }
-                },
-                None => Ok(StatusCode::BAD_REQUEST.into_response()),
-            }
-        })
+/// Auth middleware extracts the user using sent session cookie.
+/// If session does not valid or expired responds with 401 Unauthorized.
+pub async fn auth_middleware<B>(
+    state: State<AppState>,
+    ExtractSessionId(session_id): ExtractSessionId,
+    mut request: Request<B>,
+    next: Next<B>,
+) -> Response {
+    // TODO: Add checks for expired sessions etc.
+    if let Ok(Some(session)) = state.session_manager.get_session(session_id).await {
+        request.extensions_mut().insert(session);
+        next.run(request).await.into_response()
+    } else {
+        StatusCode::UNAUTHORIZED.into_response()
     }
 }
