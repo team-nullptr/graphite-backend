@@ -1,41 +1,67 @@
-use crate::{ApiError, AppState};
-use anyhow::Context;
-use axum::extract::{Query, State};
-use hyper::StatusCode;
 use std::collections::HashMap;
+
+use anyhow::anyhow;
+use axum::{
+    extract::{Query, State},
+    response::{AppendHeaders, IntoResponse},
+};
+use hyper::{
+    header::{LOCATION, SET_COOKIE},
+    StatusCode,
+};
+
+use crate::{api, AppState};
 
 pub async fn github_oauth_redirect(
     State(app_state): State<AppState>,
     Query(params): Query<HashMap<String, String>>,
-) -> Result<StatusCode, ApiError> {
+) -> Result<impl IntoResponse, api::Error> {
     let code = params
         .get("code")
-        .ok_or(ApiError::Internal(anyhow::anyhow!(
+        .ok_or(api::Error::Internal(anyhow::anyhow!(
             "Expected code query param"
         )))?;
 
     let access_token_resp = app_state
         .github_service
-        .get_github_access_token(code, &app_state.config)
+        .get_github_access_token(
+            code,
+            &app_state.config.oauth.github_client_id,
+            &app_state.config.oauth.github_secret_id,
+        )
         .await
-        .map_err(|e| ApiError::Internal(e))?;
+        .map_err(|e| api::Error::Internal(e))?;
+
+    println!("{:?}", access_token_resp);
 
     let github_user = app_state
         .github_service
         .get_github_user(&access_token_resp.access_token)
         .await
-        .map_err(|e| ApiError::Internal(e))?;
+        .map_err(api::Error::Internal)?;
 
-    // TODO: Create a new user in our database if he does not exist yet.
+    println!("{:?}", github_user);
 
-    app_state
-        .user_service
-        .create_user_if_new(github_user)
+    let session_id = app_state
+        .session_manager
+        .create_session(github_user)
         .await
-        .context("failed to create user if he does not exist")
-        .map_err(|e| ApiError::Internal(e))?;
+        .map_err(|_| api::Error::Internal(anyhow!("Failed to create session")))?;
 
-    // TODO: Create a session and return it back to the user.
+    println!("{}", session_id);
 
-    Ok(StatusCode::OK)
+    // TODO: Make cookie secure on production
+    let session_cookie = format!(
+        "sid={}; Path=/; Max-Age={}; SameSite=None; Secure; HttpOnly",
+        session_id,
+        60 * 60 * 24 * 7,
+    );
+
+    Ok((
+        StatusCode::PERMANENT_REDIRECT,
+        AppendHeaders([
+            (SET_COOKIE, session_cookie),
+            (LOCATION, "http://localhost:5173/".to_string()),
+        ]),
+    ))
 }

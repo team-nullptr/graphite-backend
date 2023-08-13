@@ -6,7 +6,7 @@ Backend server for Graphite.
 Connecting with locally created database
 
 ```
-psql -p 5432 -h localhost -U postgres
+mysql -u root -h 127.0.0.1 -P 3306 -p
 ```
 
 In order to run the app you will need `/config/dev.toml` file. Here is the template:

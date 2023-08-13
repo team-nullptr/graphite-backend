@@ -1,11 +1,13 @@
-version: "3.1"
+version: "3.8"
 
 services:
   database:
-    image: postgres
+    image: mysql
+    # This setting is not relevant for production.
+    command: --authentication-policy=mysql_native_password
     restart: always
     environment:
-      POSTGRES_DB: database
-      POSTGRES_PASSWORD: dev
+      MYSQL_DATABASE: database
+      MYSQL_ROOT_PASSWORD: dev
     ports:
-      - 5432:5432
+      - 3306:3306

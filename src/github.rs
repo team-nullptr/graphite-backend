@@ -1,9 +1,11 @@
-use crate::{config, ApiError};
+use std::str;
+
 use anyhow::Context;
 use hyper::{client::HttpConnector, header, Body, Client, Method, Request, Uri};
 use hyper_tls::HttpsConnector;
 use serde::{Deserialize, Serialize};
-use std::str;
+
+use crate::api;
 
 const GITHUB_API: &str = "https://api.github.com";
 
@@ -55,15 +57,16 @@ impl GitHubService {
     pub async fn get_github_access_token(
         &self,
         code: &str,
-        config: &config::Config,
+        github_client_id: &str,
+        github_secret_id: &str,
     ) -> Result<AccessTokenResp, anyhow::Error> {
         let uri = format!(
             "https://github.com/login/oauth/access_token?client_id={}&client_secret={}&code={}",
-            config.oauth.github_client_id, config.oauth.github_secret_id, code
+            github_client_id, github_secret_id, code
         )
         .parse::<Uri>()
         .map_err(|_| {
-            ApiError::Internal(anyhow::anyhow!("failed to parse github access_token uri"))
+            api::Error::Internal(anyhow::anyhow!("failed to parse github access_token uri"))
         })?;
 
         let req = Request::builder()

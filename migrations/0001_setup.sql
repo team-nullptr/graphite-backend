@@ -1,11 +1,12 @@
 CREATE TABLE projects (
-    id SERIAL,
+    id SERIAL PRIMARY KEY,
+    user_id INT NOT NULL,
     name text NOT NULL
 );
 
-CREATE TABLE users (
-    -- This is github user's id
-    id integer PRIMARY KEY NOT NULL UNIQUE,
-    name text NOT NULL,
-    avatar_url text NOT NULL
-);
+CREATE TABLE sessions (
+    id INT PRIMARY KEY AUTO_INCREMENT NOT NULL,
+    session_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    avatar_url TEXT NOT NULL
+)

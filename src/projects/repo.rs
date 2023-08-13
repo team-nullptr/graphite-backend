@@ -1,4 +1,5 @@
 use super::model::{Project, ProjectCreate};
+use sqlx::MySqlPool;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -12,11 +13,11 @@ pub struct CreateError(#[source] sqlx::Error);
 /// User repo gives an easy access to different user-related db operaions.
 #[derive(Clone)]
 pub struct ProjectRepo {
-    db: sqlx::PgPool,
+    db: MySqlPool,
 }
 
 impl ProjectRepo {
-    pub fn new(db: sqlx::PgPool) -> Self {
+    pub fn new(db: MySqlPool) -> Self {
         Self { db }
     }
 
@@ -27,17 +28,17 @@ impl ProjectRepo {
         Ok(sqlx::query_as::<_, Project>(sql)
             .fetch_all(&self.db)
             .await
-            .map_err(|e| GetAllError(e))?)
+            .map_err(GetAllError)?)
     }
 
     /// Creates a new user in the database.
     pub async fn create(&self, project_create: ProjectCreate) -> Result<Project, CreateError> {
-        let sql = "INSERT INTO projects (name) VALUES ($1) RETURNING *";
+        let sql = "INSERT INTO projects (name) VALUES (?) RETURNING *";
 
         Ok(sqlx::query_as::<_, Project>(sql)
             .bind(project_create.name)
             .fetch_one(&self.db)
             .await
-            .map_err(|e| CreateError(e))?)
+            .map_err(CreateError)?)
     }
 }

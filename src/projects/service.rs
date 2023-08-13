@@ -27,11 +27,7 @@ impl ProjectService {
     }
 
     pub async fn get_all(&self) -> Result<Vec<Project>, GetAllError> {
-        let projects = self
-            .repo
-            .get_all()
-            .await
-            .map_err(|e| GetAllError::RepoError(e))?;
+        let projects = self.repo.get_all().await.map_err(GetAllError::RepoError)?;
 
         Ok(projects)
     }
@@ -43,7 +39,7 @@ impl ProjectService {
             .repo
             .create(project_create)
             .await
-            .map_err(|e| CreateError::RepoError(e))?;
+            .map_err(CreateError::RepoError)?;
 
         Ok(project)
     }
