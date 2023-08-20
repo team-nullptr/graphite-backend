@@ -1,6 +1,6 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
-use anyhow::anyhow;
+use anyhow::Context;
 use axum::{
     extract::{Query, State},
     response::{AppendHeaders, IntoResponse},
@@ -12,15 +12,16 @@ use hyper::{
 
 use crate::{api, AppState};
 
+const SESSION_COOKIE_LIFETIME: i32 = 60 * 60 * 24 * 7;
+
 pub async fn github_oauth_redirect(
-    State(app_state): State<AppState>,
+    State(app_state): State<Arc<AppState>>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<impl IntoResponse, api::Error> {
-    let code = params
-        .get("code")
-        .ok_or(api::Error::Internal(anyhow::anyhow!(
-            "Expected code query param"
-        )))?;
+    let code = params.get("code").ok_or(api::Error::BadRequest {
+        source: None,
+        message: "expected code query param".to_string(),
+    })?;
 
     let access_token_resp = app_state
         .github_service
@@ -30,7 +31,7 @@ pub async fn github_oauth_redirect(
             &app_state.config.oauth.github_secret_id,
         )
         .await
-        .map_err(|e| api::Error::Internal(e))?;
+        .map_err(|e| api::Error::Internal(e.into()))?;
 
     println!("{:?}", access_token_resp);
 
@@ -38,7 +39,7 @@ pub async fn github_oauth_redirect(
         .github_service
         .get_github_user(&access_token_resp.access_token)
         .await
-        .map_err(api::Error::Internal)?;
+        .map_err(|e| api::Error::Internal(e.into()))?;
 
     println!("{:?}", github_user);
 
@@ -46,15 +47,14 @@ pub async fn github_oauth_redirect(
         .session_manager
         .create_session(github_user)
         .await
-        .map_err(|_| api::Error::Internal(anyhow!("Failed to create session")))?;
+        .context("failed to create a new session")
+        .map_err(|e| api::Error::Internal(e))?;
 
     println!("{}", session_id);
 
-    // TODO: Make cookie secure on production
     let session_cookie = format!(
         "sid={}; Path=/; Max-Age={}; SameSite=None; Secure; HttpOnly",
-        session_id,
-        60 * 60 * 24 * 7,
+        session_id, SESSION_COOKIE_LIFETIME
     );
 
     Ok((

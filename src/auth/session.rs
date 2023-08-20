@@ -1,5 +1,7 @@
+use std::sync::Arc;
+
+use async_trait::async_trait;
 use axum::{
-    async_trait,
     extract::{FromRequestParts, State},
     http::request::Parts,
     middleware::Next,
@@ -14,9 +16,10 @@ use crate::{github::GitHubUser, AppState};
 
 #[derive(Debug, Clone, FromRow)]
 pub struct Session {
-    pub id: i32,
+    pub id: u64,
     #[sqlx(skip)]
     pub session_id: String,
+    pub user_id: i32,
     pub name: String,
     pub avatar_url: String,
 }
@@ -43,11 +46,14 @@ impl SessionManager {
         &self,
         github_user: GitHubUser,
     ) -> Result<String, CreateSessionError> {
-        let sql = "INSERT INTO sessions (session_id, name, avatar_url) VALUES (?, ?, ?)";
+        let sql =
+            "INSERT INTO sessions (session_id, user_id, name, avatar_url) VALUES (?, ?, ?, ?)";
+
         let session_id = Uuid::new_v4().to_string();
 
         query(sql)
             .bind(&session_id)
+            .bind(github_user.id)
             .bind(github_user.name)
             .bind(github_user.avatar_url)
             .execute(&self.db)
@@ -117,7 +123,7 @@ where
 /// Auth middleware extracts the user using sent session cookie.
 /// If session does not valid or expired responds with 401 Unauthorized.
 pub async fn auth_middleware<B>(
-    state: State<AppState>,
+    state: State<Arc<AppState>>,
     ExtractSessionId(session_id): ExtractSessionId,
     mut request: Request<B>,
     next: Next<B>,

@@ -5,8 +5,6 @@ use hyper::{client::HttpConnector, header, Body, Client, Method, Request, Uri};
 use hyper_tls::HttpsConnector;
 use serde::{Deserialize, Serialize};
 
-use crate::api;
-
 const GITHUB_API: &str = "https://api.github.com";
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -23,6 +21,14 @@ pub struct AccessTokenResp {
     pub access_token: String,
 }
 
+#[derive(thiserror::Error, Debug)]
+#[error("failed to get github user")]
+pub struct GetGithubUserError(#[source] anyhow::Error);
+
+#[derive(thiserror::Error, Debug)]
+#[error("failed to get github user access token")]
+pub struct GetGithubAccessTokenError(#[source] anyhow::Error);
+
 #[derive(Clone)]
 pub struct GitHubService {
     https_client: Client<HttpsConnector<HttpConnector>>,
@@ -34,10 +40,14 @@ impl GitHubService {
     }
 
     /// Gets github user given user's access token.
-    pub async fn get_github_user(&self, access_token: &str) -> Result<GitHubUser, anyhow::Error> {
+    pub async fn get_github_user(
+        &self,
+        access_token: &str,
+    ) -> Result<GitHubUser, GetGithubUserError> {
         let uri = format!("{GITHUB_API}/user")
             .parse::<Uri>()
-            .context("failed to parse github user api uri")?;
+            .context("failed to parse github user uri")
+            .map_err(GetGithubUserError)?;
 
         let req = Request::builder()
             .method(Method::GET)
@@ -45,12 +55,25 @@ impl GitHubService {
             .header(header::USER_AGENT, "Graphite")
             .header(header::ACCEPT, "application/json")
             .header("Authorization", format!("Bearer {}", access_token))
-            .body(Body::empty())?;
+            .body(Body::empty())
+            .context("failed to prepare the request")
+            .map_err(GetGithubUserError)?;
 
-        let mut resp = self.https_client.request(req).await?;
-        let body = hyper::body::to_bytes(resp.body_mut()).await?;
+        let mut response = self
+            .https_client
+            .request(req)
+            .await
+            .context("failed to make a request")
+            .map_err(GetGithubUserError)?;
 
-        Ok(serde_json::from_slice::<GitHubUser>(&body)?)
+        let body = hyper::body::to_bytes(response.body_mut())
+            .await
+            .context("failed to extract response body")
+            .map_err(GetGithubUserError)?;
+
+        Ok(serde_json::from_slice::<GitHubUser>(&body)
+            .context("failed to deserialize user data response")
+            .map_err(GetGithubUserError)?)
     }
 
     /// Gets access token for given auth code.
@@ -59,25 +82,37 @@ impl GitHubService {
         code: &str,
         github_client_id: &str,
         github_secret_id: &str,
-    ) -> Result<AccessTokenResp, anyhow::Error> {
+    ) -> Result<AccessTokenResp, GetGithubAccessTokenError> {
         let uri = format!(
             "https://github.com/login/oauth/access_token?client_id={}&client_secret={}&code={}",
             github_client_id, github_secret_id, code
         )
         .parse::<Uri>()
-        .map_err(|_| {
-            api::Error::Internal(anyhow::anyhow!("failed to parse github access_token uri"))
-        })?;
+        .context("failed to parse github access_token uri")
+        .map_err(GetGithubAccessTokenError)?;
 
         let req = Request::builder()
             .method(Method::GET)
             .uri(uri)
             .header(header::ACCEPT, "application/json")
-            .body(Body::empty())?;
+            .body(Body::empty())
+            .context("failed to prepare the request")
+            .map_err(GetGithubAccessTokenError)?;
 
-        let mut resp = self.https_client.request(req).await?;
-        let body = hyper::body::to_bytes(resp.body_mut()).await?;
+        let mut resp = self
+            .https_client
+            .request(req)
+            .await
+            .context("failed to make a request")
+            .map_err(GetGithubAccessTokenError)?;
 
-        Ok(serde_json::from_slice::<AccessTokenResp>(&body)?)
+        let body = hyper::body::to_bytes(resp.body_mut())
+            .await
+            .context("failed to extract response body")
+            .map_err(GetGithubAccessTokenError)?;
+
+        Ok(serde_json::from_slice::<AccessTokenResp>(&body)
+            .context("failed to deserialize acces token response")
+            .map_err(GetGithubAccessTokenError)?)
     }
 }
